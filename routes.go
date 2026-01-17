@@ -148,6 +148,7 @@ func InitRoutes(apper Apper, r *mux.Router) *mux.Router {
 	apiColls.HandleFunc("/{alias}/collect", handler.All(addPost)).Methods("POST")
 	apiColls.HandleFunc("/{alias}/pin", handler.All(pinPost)).Methods("POST")
 	apiColls.HandleFunc("/{alias}/unpin", handler.All(pinPost)).Methods("POST")
+	apiColls.HandleFunc("/{alias}/email/subscribers/export.csv", handler.Download(handleExportEmailSubscriptions, UserLevelUser)).Methods("GET")
 	apiColls.HandleFunc("/{alias}/email/subscribe", handler.All(handleCreateEmailSubscription)).Methods("POST")
 	apiColls.HandleFunc("/{alias}/email/subscribe", handler.All(handleDeleteEmailSubscription)).Methods("DELETE")
 	apiColls.HandleFunc("/{collection}/email/unsubscribe", handler.All(handleDeleteEmailSubscription)).Methods("GET")
@@ -221,6 +222,8 @@ func InitRoutes(apper Apper, r *mux.Router) *mux.Router {
 func RouteCollections(handler *Handler, r *mux.Router) {
 	r.HandleFunc("/logout", handler.Web(handleLogOutCollection, UserLevelOptional))
 	r.HandleFunc("/page/{page:[0-9]+}", handler.Web(handleViewCollection, UserLevelReader))
+	r.HandleFunc("/archive/", handler.Web(handleViewCollection, UserLevelReader))
+	r.HandleFunc("/{archive:archive}/page/{page:[0-9]+}", handler.Web(handleViewCollection, UserLevelReader))
 	r.HandleFunc("/lang:{lang:[a-z]{2}}", handler.Web(handleViewCollectionLang, UserLevelOptional))
 	r.HandleFunc("/lang:{lang:[a-z]{2}}/page/{page:[0-9]+}", handler.Web(handleViewCollectionLang, UserLevelOptional))
 	r.HandleFunc("/tag:{tag}", handler.Web(handleViewCollectionTag, UserLevelReader))
