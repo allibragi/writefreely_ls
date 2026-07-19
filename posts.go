@@ -14,7 +14,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"github.com/writefreely/writefreely/spam"
 	"html/template"
 	"net/http"
 	"net/url"
@@ -39,6 +38,7 @@ import (
 	"github.com/writeas/web-core/tags"
 	"github.com/writefreely/writefreely/page"
 	"github.com/writefreely/writefreely/parse"
+	"github.com/writefreely/writefreely/spam"
 )
 
 const (
@@ -49,8 +49,16 @@ const (
 	postIDLen     = 10
 
 	postMetaDateFormat = "2006-01-02 15:04:05"
+)
 
-	shortCodePaid = "<!--paid-->"
+type PostType string
+
+const (
+	postArch PostType = "archive"
+
+	shortCodeMore  = "<!--more-->"
+	shortCodePaid  = "<!--paid-->"
+	shortCodeNoSig = "<!--nosig-->"
 )
 
 type (
@@ -138,16 +146,17 @@ type (
 	CollectionPostPage struct {
 		*PublicPost
 		page.StaticPage
-		IsOwner        bool
-		IsPinned       bool
-		IsCustomDomain bool
-		Monetization   string
-		Verification   string
-		PinnedPosts    *[]PublicPost
-		IsFound        bool
-		IsAdmin        bool
-		CanInvite      bool
-		Silenced       bool
+		IsOwner         bool
+		IsPinned        bool
+		IsCustomDomain  bool
+		Monetization    string
+		Verification    string
+		FediverseAuthor string
+		PinnedPosts     *[]PublicPost
+		IsFound         bool
+		IsAdmin         bool
+		CanInvite       bool
+		Silenced        bool
 
 		// Helper field for Chorus mode
 		CollAlias string
@@ -210,8 +219,9 @@ func (p *Post) DisplayTitle() string {
 	return t
 }
 
-// PlainDisplayTitle dynamically generates a title from the Post's contents if it
-// doesn't already have an explicit title.
+// PlainDisplayTitle strips away Markdown from the generated Post's title (if
+// any), for use in places like RSS feeds and ActivityStreams objects, where
+// the raw Markdown would be unwanted.
 func (p *Post) PlainDisplayTitle() string {
 	if t := stripmd.Strip(p.DisplayTitle()); t != "" {
 		return t
@@ -1225,13 +1235,18 @@ func (p *PublicPost) ActivityObject(app *App) *activitystreams.Object {
 	o.CC = []string{
 		p.Collection.FederatedAccount() + "/followers",
 	}
-	o.Name = p.DisplayTitle()
+	o.Name = p.PlainDisplayTitle()
 	p.augmentContent()
 	if p.HTMLContent == template.HTML("") {
 		p.formatContent(cfg, false, false)
 		p.augmentReadingDestination()
 	}
 	o.Content = string(p.HTMLContent)
+	if o.Type == "Note" && p.Title.String != "" {
+		// Render the explicitly-set title inside the Note, since Mastodon (at least) doesn't show the `name`
+		// property on Notes.
+		o.Content = "<h1>" + applyBasicMarkdown([]byte(p.DisplayTitle())) + "</h1>\n\n" + o.Content
+	}
 	if p.Language.Valid {
 		o.ContentMap = map[string]string{
 			p.Language.String: string(p.HTMLContent),
@@ -1283,6 +1298,40 @@ func (p *PublicPost) ActivityObject(app *App) *activitystreams.Object {
 		o.CC = append(o.CC, iri)
 		o.Tag = append(o.Tag, activitystreams.Tag{Type: "Mention", HRef: iri, Name: handle})
 	}
+
+	// Add shortened Note as the `preview` property if this is an Article
+	if o.Type == "Article" {
+		o.Preview = p.PreviewObject(app, o)
+		o.Summary = &o.Preview.Content
+	}
+
+	return o
+}
+
+// PreviewObject returns an activitystreams.Object that can be used as an Article's `preview` property.
+func (p *PublicPost) PreviewObject(app *App, art *activitystreams.Object) *activitystreams.Object {
+	o := activitystreams.NewNoteObject()
+	o.To = nil
+	o.ID = art.ID
+	o.URL = art.URL
+	o.Published = art.Published
+	o.Updated = art.Updated
+	o.Tag = art.Tag
+	o.Attachment = art.Attachment
+
+	baseURL := p.Collection.CanonicalURL()
+	// Try to truncate at user-defined excerpt, if exists
+	exc := strings.Index(p.Content, shortCodeMore)
+	if exc == -1 {
+		// No excerpt; fall back to truncating at first paragraph
+		exc = strings.Index(p.Content, "\n\n")
+	}
+	if exc > -1 {
+		p.HTMLExcerpt = template.HTML(applyMarkdown([]byte(p.Content[:exc]+" [...]"), baseURL, app.cfg))
+	} else {
+		p.HTMLExcerpt = p.HTMLContent
+	}
+	o.Content = strings.TrimRight(string(p.Excerpt()), "\n")
 	return o
 }
 
@@ -1510,6 +1559,10 @@ func viewCollectionPost(app *App, w http.ResponseWriter, r *http.Request) error 
 				// User tried to access blog feed without a trailing slash, and
 				// there's no post with a slug "feed"
 				return impart.HTTPError{http.StatusFound, c.CanonicalURL() + "feed/"}
+			} else if slug == "archive" {
+				// User tried to access blog Archive without a trailing slash, and
+				// there's no post with a slug "archive"
+				return impart.HTTPError{http.StatusFound, c.CanonicalURL() + "archive/"}
 			}
 
 			po := &Post{
@@ -1519,7 +1572,7 @@ func viewCollectionPost(app *App, w http.ResponseWriter, r *http.Request) error 
 				RTL:      zero.NewBool(false, true),
 				Content: `<p class="msg">This page is missing.</p>
 
-Are you sure it was ever here?`,
+Are you sure it was ever here?` + shortCodeNoSig,
 			}
 			pp := po.processPost()
 			p = &pp
@@ -1604,6 +1657,18 @@ Are you sure it was ever here?`,
 		tp.IsPinned = len(*tp.PinnedPosts) > 0 && PostsContains(tp.PinnedPosts, p)
 		tp.Monetization = coll.Monetization
 		tp.Verification = coll.Verification
+		if tp.Verification != "" {
+			// Fetch info for fediverse:creator tag
+			ru, err := getRemoteUserFromURL(app, coll.Verification)
+			if err != nil {
+				if debugging {
+					log.Info("showing rel=me tag, but no local handle for %s", coll.Verification)
+				}
+			} else {
+				// Though we don't store handles with leading @, strip it here just in case
+				tp.FediverseAuthor = "@" + strings.TrimLeft(ru.Handle, "@")
+			}
+		}
 
 		if !postFound {
 			w.WriteHeader(http.StatusNotFound)
