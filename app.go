@@ -57,7 +57,7 @@ var (
 	debugging bool
 
 	// Software version can be set from git env using -ldflags
-	softwareVer = "0.16.0"
+	softwareVer = "0.17.0"
 
 	// DEPRECATED VARS
 	isSingleUser bool
@@ -925,6 +925,10 @@ func CreateUser(apper Apper, username, password string, isAdmin bool) error {
 
 	if !author.IsValidUsername(apper.App().cfg, username) {
 		return fmt.Errorf("Username %s is invalid, reserved, or shorter than configured minimum length (%d characters).", usernameDesc, apper.App().cfg.App.MinUsernameLen)
+	}
+
+	if len(password) > maxPassByteLen {
+		return impart.HTTPError{http.StatusInternalServerError, fmt.Sprintf("Password is longer than %d characters", maxPassByteLen)}
 	}
 
 	// Hash the password
