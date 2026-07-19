@@ -56,7 +56,7 @@ var (
 	debugging bool
 
 	// Software version can be set from git env using -ldflags
-	softwareVer = "0.14.0"
+	softwareVer = "0.15.1"
 
 	// DEPRECATED VARS
 	isSingleUser bool
@@ -363,7 +363,7 @@ func pageForReq(app *App, r *http.Request) page.StaticPage {
 	}
 
 	// Use custom style, if file exists
-	if _, err := os.Stat(filepath.Join(staticDir, "local", "custom.css")); err == nil {
+	if _, err := os.Stat(filepath.Join(app.cfg.Server.StaticParentDir, staticDir, "local", "custom.css")); err == nil {
 		p.CustomCSS = true
 	}
 
@@ -890,12 +890,12 @@ func CreateUser(apper Apper, username, password string, isAdmin bool) error {
 	if isAdmin {
 		// Abort if trying to create admin user, but one already exists
 		if firstUser != nil {
-			return fmt.Errorf("Admin user already exists (%s). Create a regular user with: writefreely --create-user", firstUser.Username)
+			return fmt.Errorf("Admin user already exists (%s). Create a regular user with: writefreely user create [USER]:[PASSWORD]", firstUser.Username)
 		}
 	} else {
 		// Abort if trying to create regular user, but no admin exists yet
 		if firstUser == nil {
-			return fmt.Errorf("No admin user exists yet. Create an admin first with: writefreely --create-admin")
+			return fmt.Errorf("No admin user exists yet. Create an admin first with: writefreely user create --admin [USER]:[PASSWORD]")
 		}
 	}
 
