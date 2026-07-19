@@ -591,7 +591,7 @@ func fetchCollectionPosts(app *App, w http.ResponseWriter, r *http.Request) erro
 	if err != nil {
 		return err
 	}
-	coll := &CollectionObj{Collection: *c, Posts: posts}
+	coll := &CollectionObj{Collection: *c, Posts: ps}
 	app.db.GetPostsCount(coll, isCollOwner)
 	// Strip non-public information
 	coll.Collection.ForPublic()
